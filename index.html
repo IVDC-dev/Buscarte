@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Buscador de seguidores</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #fff;
+    --accent: #2563eb;
+    --accent-light: #e0e7ff;
+    --text: #1e293b;
+    --muted: #64748b;
+  }
+
+  body {
+    font-family: "Inter", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 960px;
+    margin: 20px auto;
+    padding: 0 16px 60px;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    margin-bottom: 4px;
+    color: var(--accent);
+  }
+
+  textarea {
+    width: 100%;
+    height: 200px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-family: monospace;
+    resize: vertical;
+  }
+
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button:hover { background: #1d4ed8; }
+
+  .secondary {
+    background: var(--accent-light);
+    color: var(--accent);
+  }
+  .secondary:hover {
+    background: #c7d2fe;
+  }
+
+  .toolbar, .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  input[type="text"] {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    min-width: 240px;
+  }
+
+  .results {
+    margin-top: 20px;
+  }
+
+  .user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--card);
+    border-radius: 12px;
+    padding: 10px 14px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    margin-bottom: 8px;
+    transition: transform 0.1s ease;
+  }
+
+  .user:hover {
+    transform: scale(1.01);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+  }
+
+  .user img {
+    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border: 2px solid var(--accent-light);
+  }
+
+  .meta { font-size: 0.9rem; color: var(--muted); }
+  .score { margin-left: auto; font-weight: 600; color: var(--accent); }
+
+  footer { margin-top: 30px; color: var(--muted); font-size: 0.85rem; text-align: center; }
+
+  .letters { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .letters button {
+    padding: 4px 8px;
+    font-size: 0.8rem;
+    background: #e2e8f0;
+    color: var(--text);
+  }
+  .letters button:hover { background: var(--accent-light); color: var(--accent); }
+
+  .small { color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>🔍 Buscador de seguidores</h1>
+  <p class="small">Pega el código HTML de la lista o carga un archivo. Todo funciona localmente (nada se sube).</p>
+
+  <textarea id="inputHtml" placeholder="Pega aquí el HTML..."></textarea>
+  <div class="toolbar">
+    <input type="file" id="fileInput" accept=".html,text/html" />
+    <button id="parseBtn">Parsear HTML</button>
+    <button class="secondary" id="clearBtn">Limpiar</button>
+  </div>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="Buscar (nombre o usuario)..." />
+    <label>Similitud: <span id="umbralVal">0.7</span></label>
+    <input id="umbral" type="range" min="0" max="1" step="0.01" value="0.7" style="width:150px"/>
+    <button class="secondary" id="showAll">Mostrar todos</button>
+    <button id="exportTxt">Exportar TXT</button>
+    <button id="exportCsv">Exportar CSV</button>
+  </div>
+
+  <div class="letters" id="letters"></div>
+
+  <div class="results" id="results"></div>
+
+  <footer>
+    Hecho con ❤️ para buscar entre listas HTML locales. Puedes subir este archivo a GitHub Pages sin cambios.
+  </footer>
+
+<script>
+// ---------- Levenshtein ----------
+function levenshtein(a,b){
+  a = a||""; b = b||"";
+  const al=a.length, bl=b.length;
+  if(al===0) return bl;
+  if(bl===0) return al;
+  const dp = Array(al+1).fill().map(()=>Array(bl+1).fill(0));
+  for(let i=0;i<=al;i++) dp[i][0]=i;
+  for(let j=0;j<=bl;j++) dp[0][j]=j;
+  for(let i=1;i<=al;i++){
+    for(let j=1;j<=bl;j++){
+      const cost = a[i-1]===b[j-1]?0:1;
+      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
+    }
+  }
+  return dp[al][bl];
+}
+function similarity(a,b){
+  a=a.toLowerCase(); b=b.toLowerCase();
+  if(!a && !b) return 1;
+  const maxLen=Math.max(a.length,b.length);
+  const dist=levenshtein(a,b);
+  return (maxLen - dist)/maxLen;
+}
+
+// ---------- Variables ----------
+const inputHtml=document.getElementById('inputHtml');
+const fileInput=document.getElementById('fileInput');
+const parseBtn=document.getElementById('parseBtn');
+const clearBtn=document.getElementById('clearBtn');
+const resultsDiv=document.getElementById('results');
+const searchInput=document.getElementById('search');
+const umbralInput=document.getElementById('umbral');
+const umbralVal=document.getElementById('umbralVal');
+let extracted=[];
+
+// ---------- Parse HTML ----------
+function parseHtmlString(htmlString){
+  const doc=new DOMParser().parseFromString(htmlString,'text/html');
+  const lis=doc.querySelectorAll('li');
+  const data=[];
+
+  lis.forEach(li=>{
+    const nameEl=li.querySelector('span.css-spk7wm-5e6d46e3--SpanNickname')||li.querySelector('span');
+    const userEl=li.querySelector('p.css-1fl8ity-5e6d46e3--PUniqueId')||li.querySelector('p');
+    const imgEl=li.querySelector('img');
+    const aEl=li.querySelector('a[href*="/@"]');
+
+    let name=nameEl?nameEl.textContent.trim():'';
+    let username=userEl?userEl.textContent.trim().replace('@',''):'';
+    let photo=imgEl?imgEl.src:'';
+
+    if(aEl && !username){
+      const m=aEl.getAttribute('href').match(/\/@([^\/?#]+)/);
+      if(m) username=decodeURIComponent(m[1]);
+    }
+
+    if(name||username){
+      data.push({name,username,photo});
+    }
+  });
+
+  extracted=data;
+  renderList(extracted);
+}
+
+// ---------- Render ----------
+function renderList(list){
+  resultsDiv.innerHTML='';
+  if(!list.length){
+    resultsDiv.innerHTML='<div class="small">No se encontraron usuarios.</div>';
+    return;
+  }
+  list.forEach(item=>{
+    const el=document.createElement('div');
+    el.className='user';
+
+    if(item.photo){
+      const img=document.createElement('img');
+      img.src=item.photo;
+      el.appendChild(img);
+    }
+
+    const info=document.createElement('div');
+    info.innerHTML=`<div><strong>${escapeHtml(item.name)}</strong></div><div class="meta">@${escapeHtml(item.username)}</div>`;
+    el.appendChild(info);
+
+    if(item.score!==undefined){
+      const sc=document.createElement('div');
+      sc.className='score';
+      sc.textContent=Math.round(item.score*100)+'%';
+      el.appendChild(sc);
+    }
+
+    resultsDiv.appendChild(el);
+  });
+}
+function escapeHtml(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ---------- Búsqueda ----------
+function applySearch(){
+  const q=searchInput.value.trim().toLowerCase();
+  const thr=parseFloat(umbralInput.value)||0.7;
+  if(!q){ renderList(extracted); return; }
+
+  const res=extracted.map(e=>{
+    const n=(e.name||'').toLowerCase();
+    const u=(e.username||'').toLowerCase();
+    const sim=Math.max(similarity(q,n),similarity(q,u));
+    const contains=n.includes(q)||u.includes(q);
+    const score=contains?1:sim;
+    return {...e,score};
+  }).filter(r=>r.score>=thr).sort((a,b)=>b.score-a.score);
+
+  renderList(res);
+}
+
+// ---------- Eventos ----------
+parseBtn.onclick=()=>parseHtmlString(inputHtml.value||'');
+clearBtn.onclick=()=>{inputHtml.value='';extracted=[];renderList([]);}
+fileInput.onchange=e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{inputHtml.value=ev.target.result;parseHtmlString(inputHtml.value);}
+  reader.readAsText(f);
+}
+searchInput.oninput=applySearch;
+umbralInput.oninput=()=>{umbralVal.textContent=umbralInput.value;applySearch();};
+document.getElementById('showAll').onclick=()=>renderList(extracted);
+
+// ---------- Export ----------
+function downloadBlob(content,filename,type){
+  const blob=new Blob([content],{type});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=filename;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),500);
+}
+document.getElementById('exportTxt').onclick=()=>{
+  const txt=extracted.map(e=>`@${e.username||e.name}`).join('\n');
+  downloadBlob(txt,'seguidores.txt','text/plain');
+};
+document.getElementById('exportCsv').onclick=()=>{
+  const csv='name,username,photo\n'+
+    extracted.map(e=>`"${e.name}","${e.username}","${e.photo}"`).join('\n');
+  downloadBlob(csv,'seguidores.csv','text/csv');
+};
+
+// ---------- Letras ----------
+const lettersDiv=document.getElementById('letters');
+'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(l=>{
+  const b=document.createElement('button');
+  b.textContent=l;
+  b.onclick=()=>filterByLetter(l.toLowerCase());
+  lettersDiv.appendChild(b);
+});
+function filterByLetter(l){
+  const res=extracted.filter(e=>(e.name||e.username||'').toLowerCase().startsWith(l));
+  renderList(res);
+}
+</script>
+</body>
+</html>
